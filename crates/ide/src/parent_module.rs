@@ -1,8 +1,5 @@
-use hir::{Semantics, crate_def_map};
-use ide_db::{
-    FileId, FilePosition, RootDatabase,
-    base_db::{Crate, relevant_crates},
-};
+use hir::Semantics;
+use ide_db::{FileId, FilePosition, RootDatabase, base_db::Crate};
 use itertools::Itertools;
 use syntax::{
     algo::find_node_at_offset,
@@ -52,14 +49,14 @@ pub(crate) fn parent_module(db: &RootDatabase, position: FilePosition) -> Vec<Na
 }
 
 /// This returns `Vec` because a module may be included from several places.
+///
+/// A file pulled in by `include!` belongs to the crates of the modules that include it.
 pub(crate) fn crates_for(db: &RootDatabase, file_id: FileId) -> Vec<Crate> {
-    relevant_crates(db, file_id)
-        .iter()
-        .copied()
-        .filter(|&crate_id| {
-            crate_def_map(db, crate_id).modules_for_file(db, file_id).next().is_some()
-        })
+    Semantics::new(db)
+        .file_to_module_defs(file_id)
+        .map(|module| module.krate(db).base())
         .sorted()
+        .dedup()
         .collect()
 }
 
@@ -166,5 +163,19 @@ mod baz;
 "#,
         );
         assert_eq!(analysis.crates_for(file_id).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_resolve_crate_for_included_file() {
+        let (analysis, file_id) = fixture::file(
+            r#"
+//- minicore: include
+//- /out/generated.rs
+$0pub struct Generated;
+//- /lib.rs
+include!("out/generated.rs");
+"#,
+        );
+        assert_eq!(analysis.crates_for(file_id).unwrap().len(), 1);
     }
 }
